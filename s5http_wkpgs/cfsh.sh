@@ -70,12 +70,26 @@ read -p "6、ECH开关（回车跳过或者输入y表示开启ECH，输入n表�
 enable_ech=$([ -z "$menu" ] || [ "$menu" = y ] && echo y || echo n)
 echo
 read -p "7、分流开关（回车跳过或者输入y表示国内外分流代理，输入n表示全局代理）:" menu
-enable_ech=$([ -z "$menu" ] || [ "$menu" = y ] && echo y || echo n)
+cnrule=$([ -z "$menu" ] || [ "$menu" = y ] && echo y || echo n)
 echo
 SCRIPT="$HOME/cfs5http/cf_$port.sh"
 cat > "$SCRIPT" << EOF
 #!/bin/bash
-nohup $HOME/cfs5http/cfwp client_ip=:"$port" dns="$dns" cf_domain="$cf_domain" cf_cdnip="$cf_cdnip" token="$token" enable_ech="$enable_ech" cnrule=%cnrule% > "$HOME/cfs5http/$port.log" 2>&1 &
+INIT_SYSTEM=\$(cat /proc/1/comm)
+CMD="$HOME/cfs5http/cfwp \
+client_ip=:$port \
+dns=$dns \
+cf_domain=$cf_domain \
+cf_cdnip=$cf_cdnip \
+token=$token \
+enable_ech=$enable_ech \
+cnrule=$cnrule"
+LOG="$HOME/cfs5http/$port.log"
+if [ "\$INIT_SYSTEM" = "systemd" ]; then
+exec \$CMD
+else
+nohup \$CMD > "\$LOG" 2>&1 &
+fi
 EOF
 chmod +x "$SCRIPT"
 INIT_SYSTEM=$(cat /proc/1/comm)
@@ -85,6 +99,7 @@ cat > "/etc/systemd/system/cf_$port.service" << EOF
 Description=CF $port Service
 After=network.target
 [Service]
+Type=simple
 ExecStart=/bin/bash $SCRIPT
 Restart=always
 [Install]
@@ -95,10 +110,11 @@ systemctl start "cf_$port.service" >/dev/null 2>&1
 systemctl enable "cf_$port.service" >/dev/null 2>&1
 elif [ "$INIT_SYSTEM" = "procd" ]; then
 RCLOCAL="/etc/rc.local"
-[ ! -f "$RCLOCAL" ] && touch "$RCLOCAL"
-sed -i "/^exit 0/i \/bin\/bash $SCRIPT" "$RCLOCAL"
-fi
+[ ! -f "$RCLOCAL" ] && echo -e "#!/bin/sh\nexit 0" > "$RCLOCAL"; grep -q "$SCRIPT" "$RCLOCAL" || (grep -q "^exit 0" "$RCLOCAL" && sed -i "/^exit 0/i /bin/bash $SCRIPT" "$RCLOCAL" || echo "/bin/bash $SCRIPT" >> "$RCLOCAL"); tail -n1 "$RCLOCAL" | grep -q "^exit 0" || echo "exit 0" >> "$RCLOCAL"
 bash "$SCRIPT"
+else
+bash "$SCRIPT"
+fi
 echo "安装完毕，Socks5/Http节点已在运行中，可进入菜单选择2，查看节点配置信息及日志" && sleep 5
 echo
 until grep -q '服务端域名与端口\|客户端地址与端口\|运行中的优选IP' "$HOME/cfs5http/$port.log"; do sleep 1; done; head -n 16 "$HOME/cfs5http/$port.log" | grep '服务端域名与端口\|客户端地址与端口\|运行中的优选IP'
